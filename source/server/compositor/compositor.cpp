@@ -343,9 +343,9 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	// TEMP debug: blend mode decides whether the alpha stream is produced at all
 	static int debug_blend_frame = 0;
 	if (debug_blend_frame++ % 360 == 0)
-		U_LOG_I("blend debug: env_blend_mode=%d (alpha=%d) wheel enabled=%d rect=%f,%f,%f,%f",
+		U_LOG_I("blend debug: env_blend_mode=%d (alpha=%d) wheel enabled=%d",
 		        int(layer_accum.data.env_blend_mode), int(XRT_BLEND_MODE_ALPHA_BLEND),
-		        wheel.enabled, wheel.min_x, wheel.min_y, wheel.max_x, wheel.max_y);
+		        wheel.enabled);
 
 	// Check if we can pass a layer directly to foveation
 	if (layer_accum.layer_count == 1 and
@@ -427,6 +427,8 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	image_barriers.clear();
 
 	cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, *query_pool, 1);
+
+	apply_wheel_mask(view_info.pose, view_info.fov, flip_y);
 
 	view_info.foveation = foveation.foveate(
 	        vk.device,
@@ -682,102 +684,291 @@ void compositor::send_video_stream_description()
 
 namespace
 {
-// Wheel mask editing. The rectangle is in eye UV (0..1, top-left origin).
-constexpr float wheel_mask_min_size = 0.02f; // smallest width or height
-constexpr float wheel_mask_speed = 0.004f;   // UV per frame at full stick deflection
-constexpr float wheel_mask_deadzone = 0.15f;
+// Wheel placement and mask editing. Head-space rectangles are in eye UV (0..1, top-left origin).
+constexpr float wheel_min_uv_size = 0.02f;   // smallest head-space width or height
+constexpr float wheel_min_metres = 0.1f;     // smallest wheel width or height
+constexpr float wheel_move_speed = 0.004f;   // UV per frame at full left-stick deflection
+constexpr float wheel_nudge_speed = 0.002f;  // metres per frame at full left-stick deflection
+constexpr float wheel_size_speed = 0.002f;   // metres per frame at full right-stick deflection
+constexpr float wheel_deadzone = 0.15f;
+// A newly placed wheel goes below and in front of the head, in the head's orientation.
+constexpr XrVector3f wheel_place_offset{0.0f, -0.25f, -0.5f};
 
-std::filesystem::path wheel_mask_path()
+XrVector3f add(XrVector3f a, XrVector3f b)
+{
+	return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+XrVector3f cross(XrVector3f a, XrVector3f b)
+{
+	return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+// Rotates v by the unit quaternion q.
+XrVector3f rotate(XrQuaternionf q, XrVector3f v)
+{
+	XrVector3f u{q.x, q.y, q.z};
+	XrVector3f t = cross(u, v);
+	XrVector3f tt = cross(u, t);
+	return {v.x + 2 * (q.w * t.x + tt.x), v.y + 2 * (q.w * t.y + tt.y), v.z + 2 * (q.w * t.z + tt.z)};
+}
+
+// Keeps only the yaw of q, so a box placed with it stands upright whatever the head's pitch and roll.
+XrQuaternionf yaw_only(XrQuaternionf q)
+{
+	XrVector3f forward = rotate(q, {0, 0, -1});
+	float yaw = std::atan2(-forward.x, -forward.z);
+	return {0, std::sin(yaw / 2), 0, std::cos(yaw / 2)};
+}
+
+// Moves a tracking-space point into a view's space, where the view looks down -Z.
+XrVector3f to_view(const XrPosef & view, XrVector3f world)
+{
+	XrVector3f rel{world.x - view.position.x, world.y - view.position.y, world.z - view.position.z};
+	XrQuaternionf inverse{-view.orientation.x, -view.orientation.y, -view.orientation.z, view.orientation.w};
+	return rotate(inverse, rel);
+}
+
+// Projects a view-space point in front of the eye into the eye's UV.
+// The eye image is a flat projection, so UV is linear in the tangent of the angle, not the angle.
+XrVector2f project(const XrFovf & fov, bool flip_y, XrVector3f local)
+{
+	float tx = local.x / -local.z;
+	float ty = local.y / -local.z;
+	float left = std::tan(fov.angleLeft);
+	float right = std::tan(fov.angleRight);
+	float up = std::tan(fov.angleUp);
+	float down = std::tan(fov.angleDown);
+	XrVector2f uv{(tx - left) / (right - left), (up - ty) / (up - down)};
+	if (flip_y)
+		uv.y = 1 - uv.y;
+	return uv;
+}
+
+// Clips a view-space polygon to the part in front of the eye's near plane.
+std::vector<XrVector3f> clip_near(const std::vector<XrVector3f> & polygon)
+{
+	constexpr float near = 0.01f;
+	auto inside = [](XrVector3f p) { return p.z <= -near; };
+	std::vector<XrVector3f> out;
+	for (size_t i = 0; i < polygon.size(); ++i)
+	{
+		XrVector3f a = polygon[i];
+		XrVector3f b = polygon[(i + 1) % polygon.size()];
+		if (inside(a))
+			out.push_back(a);
+		if (inside(a) != inside(b))
+		{
+			float t = (-near - a.z) / (b.z - a.z);
+			out.push_back({a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), -near});
+		}
+	}
+	return out;
+}
+
+std::filesystem::path wheel_file()
 {
 	if (const char * xdg = std::getenv("XDG_CONFIG_HOME"))
 		return std::filesystem::path(xdg) / "wivrn" / "wheel-mask.txt";
 	return std::filesystem::path(std::getenv("HOME")) / ".config" / "wivrn" / "wheel-mask.txt";
 }
 
-// WIVRN_WHEEL_MASK wins over the saved file. Without either, the mask starts disabled at a default position.
-wheel_mask load_wheel_mask()
+// Line 1: head-space rectangle. Line 2, only when anchored: x,y,z, qx,qy,qz,qw, width, height.
+// WIVRN_WHEEL_MASK sets the head-space rectangle and takes priority over line 1 of the file.
+wivrn::wheel_placement load_wheel_placement()
 {
-	std::string text;
+	wivrn::wheel_placement wheel;
+	std::string rect_line;
+	std::string anchor_line;
 	const char * env = std::getenv("WIVRN_WHEEL_MASK");
 	if (env != nullptr)
-		text = env;
-	else if (std::ifstream file(wheel_mask_path()); file)
-		std::getline(file, text);
+	{
+		rect_line = env;
+	}
+	else if (std::ifstream file(wheel_file()); file)
+	{
+		std::getline(file, rect_line);
+		std::getline(file, anchor_line);
+	}
 
-	float v[4] = {0.25f, 0.55f, 0.75f, 1.0f};
-	bool valid = std::sscanf(text.c_str(), "%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3]) == 4;
-	if (env != nullptr and not valid)
+	float r[4];
+	if (std::sscanf(rect_line.c_str(), "%f,%f,%f,%f", &r[0], &r[1], &r[2], &r[3]) == 4)
+	{
+		std::copy(r, r + 4, wheel.rect);
+		wheel.enabled = true;
+	}
+	else if (env != nullptr)
+	{
 		U_LOG_W("WIVRN_WHEEL_MASK must be min_x,min_y,max_x,max_y, ignoring \"%s\"", env);
+	}
 
-	return wheel_mask{
-	        .enabled = valid ? 1 : 0,
-	        .min_x = v[0],
-	        .min_y = v[1],
-	        .max_x = v[2],
-	        .max_y = v[3],
-	};
+	XrVector3f p{};
+	XrQuaternionf q{0, 0, 0, 1};
+	float size[2] = {};
+	if (std::sscanf(anchor_line.c_str(), "%f,%f,%f,%f,%f,%f,%f,%f,%f", &p.x, &p.y, &p.z, &q.x, &q.y, &q.z, &q.w, &size[0], &size[1]) == 9)
+	{
+		wheel.anchored = true;
+		wheel.enabled = true;
+		wheel.pose.position = p;
+		wheel.pose.orientation = q;
+		wheel.width = size[0];
+		wheel.height = size[1];
+	}
+	return wheel;
 }
 
-void save_wheel_mask(const wheel_mask & mask)
+void save_wheel_placement(const wivrn::wheel_placement & wheel)
 {
-	auto path = wheel_mask_path();
+	auto path = wheel_file();
 	std::filesystem::create_directories(path.parent_path());
-	std::ofstream(path) << std::format("{},{},{},{}\n", mask.min_x, mask.min_y, mask.max_x, mask.max_y);
-	U_LOG_I("Wheel mask saved to %s", path.c_str());
+	std::ofstream file(path);
+	file << std::format("{},{},{},{}\n", wheel.rect[0], wheel.rect[1], wheel.rect[2], wheel.rect[3]);
+	if (wheel.anchored)
+	{
+		const auto & p = wheel.pose.position;
+		const auto & q = wheel.pose.orientation;
+		file << std::format("{},{},{},{},{},{},{},{},{}\n", p.x, p.y, p.z, q.x, q.y, q.z, q.w, wheel.width, wheel.height);
+	}
+	U_LOG_I("Wheel saved to %s", path.c_str());
 }
 } // namespace
 
-// Left thumbstick moves the rectangle, right thumbstick resizes it, right A saves it.
+// Left thumbstick moves the wheel, right thumbstick resizes it, right B places it at the head, right A saves.
 void compositor::update_wheel_mask()
 {
 	auto & left = session.get_left_controller();
 	auto & right = session.get_right_controller();
 
-	// OpenXR convention: positive x is right, positive y is up.
 	auto stick = [](std::optional<xrt_input> input) {
 		return input ? input->value.vec2 : xrt_vec2{};
 	};
+	auto pressed = [](std::optional<xrt_input> input) {
+		return input and input->value.boolean;
+	};
 	auto deadzone = [](float v) {
-		return std::abs(v) < wheel_mask_deadzone ? 0.0f : v;
+		return std::abs(v) < wheel_deadzone ? 0.0f : v;
 	};
 
+	// OpenXR convention: positive x is right, positive y is up.
 	xrt_vec2 move = stick(left.get_input(XRT_INPUT_TOUCH_THUMBSTICK));
 	xrt_vec2 grow = stick(right.get_input(XRT_INPUT_TOUCH_THUMBSTICK));
-	auto a = right.get_input(XRT_INPUT_TOUCH_A_CLICK);
-	bool save_down = a and a->value.boolean;
+	bool save_down = pressed(right.get_input(XRT_INPUT_TOUCH_A_CLICK));
+	bool place_down = pressed(right.get_input(XRT_INPUT_TOUCH_B_CLICK));
 
-	// TEMP debug: show what the controllers report, about every 5 seconds at 72 Hz
-	static int debug_frame = 0;
-	if (debug_frame++ % 360 == 0)
-		U_LOG_I("wheel debug: left stick=(%f,%f) found=%d, right stick=(%f,%f) found=%d, A=%d found=%d",
-		        move.x, move.y, left.get_input(XRT_INPUT_TOUCH_THUMBSTICK).has_value(),
-		        grow.x, grow.y, right.get_input(XRT_INPUT_TOUCH_THUMBSTICK).has_value(),
-		        save_down, a.has_value());
+	// Act on button presses, not on holds
+	// Placing starts a fresh, upright box at the default size, facing where the head faces
+	if (place_down and not wheel_place_was_down)
+	{
+		XrQuaternionf facing = yaw_only(head_pose.orientation);
+		wivrn::wheel_placement defaults;
+		wheel.anchored = true;
+		wheel.enabled = true;
+		wheel.width = defaults.width;
+		wheel.height = defaults.height;
+		wheel.pose.orientation = facing;
+		wheel.pose.position = add(head_pose.position, rotate(facing, wheel_place_offset));
+	}
+	wheel_place_was_down = place_down;
 
-	float dx = deadzone(move.x) * wheel_mask_speed;
-	float dy = -deadzone(move.y) * wheel_mask_speed; // stick up moves the rectangle up the image
-	float gx = deadzone(grow.x) * wheel_mask_speed;
-	float gy = deadzone(grow.y) * wheel_mask_speed;  // stick up grows the rectangle in both directions
-	if (dx != 0 or dy != 0 or gx != 0 or gy != 0)
-		wheel.enabled = 1;
+	float mx = deadzone(move.x);
+	float my = deadzone(move.y);
+	float gx = deadzone(grow.x);
+	float gy = deadzone(grow.y);
+	if (mx != 0 or my != 0 or gx != 0 or gy != 0)
+		wheel.enabled = true;
 
-	wheel.min_x += dx - gx;
-	wheel.max_x += dx + gx;
-	wheel.min_y += dy - gy;
-	wheel.max_y += dy + gy;
+	if (wheel.anchored)
+	{
+		// Left and right follow the box's own sideways direction, up and down stay vertical
+		XrVector3f side = rotate(wheel.pose.orientation, {mx * wheel_nudge_speed, 0, 0});
+		wheel.pose.position = add(wheel.pose.position, {side.x, my * wheel_nudge_speed, side.z});
+		wheel.width = std::max(wheel_min_metres, wheel.width + gx * wheel_size_speed);
+		wheel.height = std::max(wheel_min_metres, wheel.height + gy * wheel_size_speed);
+	}
+	else
+	{
+		float dx = mx * wheel_move_speed;
+		float dy = -my * wheel_move_speed; // stick up moves the rectangle up the image
+		float ex = gx * wheel_move_speed;
+		float ey = gy * wheel_move_speed;  // stick up grows the rectangle in both directions
+		wheel.rect[0] += dx - ex;
+		wheel.rect[2] += dx + ex;
+		wheel.rect[1] += dy - ey;
+		wheel.rect[3] += dy + ey;
 
-	auto clamp_range = [](float & lo, float & hi) {
-		lo = std::clamp(lo, 0.0f, 1.0f - wheel_mask_min_size);
-		hi = std::clamp(hi, lo + wheel_mask_min_size, 1.0f);
-	};
-	clamp_range(wheel.min_x, wheel.max_x);
-	clamp_range(wheel.min_y, wheel.max_y);
+		auto clamp_range = [](float & lo, float & hi) {
+			lo = std::clamp(lo, 0.0f, 1.0f - wheel_min_uv_size);
+			hi = std::clamp(hi, lo + wheel_min_uv_size, 1.0f);
+		};
+		clamp_range(wheel.rect[0], wheel.rect[2]);
+		clamp_range(wheel.rect[1], wheel.rect[3]);
+	}
 
 	if (save_down and not wheel_save_was_down)
-		save_wheel_mask(wheel);
+		save_wheel_placement(wheel);
 	wheel_save_was_down = save_down;
+}
 
-	foveation.set_wheel_mask(wheel);
+// Runs once the frame's per-eye poses and FOVs are known, before foveation reads the mask.
+void compositor::apply_wheel_mask(const std::array<XrPosef, 2> & poses, const std::array<XrFovf, 2> & fovs, bool flip_y)
+{
+	head_pose.position = {
+	        (poses[0].position.x + poses[1].position.x) / 2,
+	        (poses[0].position.y + poses[1].position.y) / 2,
+	        (poses[0].position.z + poses[1].position.z) / 2,
+	};
+	head_pose.orientation = poses[0].orientation;
+
+	wivrn::wheel_mask mask{};
+	mask.enabled = wheel.enabled ? 1 : 0;
+	for (int eye = 0; eye < 2; ++eye)
+	{
+		float * out = mask.eye + 4 * eye;
+		if (not wheel.anchored)
+		{
+			std::copy(wheel.rect, wheel.rect + 4, out);
+			continue;
+		}
+
+		// Project the wheel's box into this eye, and use its bounding rectangle.
+		// The part of the box behind the eye is clipped off, so a box partly behind the eye still shows.
+		float w = wheel.width / 2;
+		float h = wheel.height / 2;
+		std::vector<XrVector3f> box;
+		for (XrVector3f corner: {XrVector3f{-w, -h, 0}, XrVector3f{w, -h, 0}, XrVector3f{w, h, 0}, XrVector3f{-w, h, 0}})
+			box.push_back(to_view(poses[eye], add(wheel.pose.position, rotate(wheel.pose.orientation, corner))));
+
+		XrVector2f lo{2, 2};
+		XrVector2f hi{-1, -1};
+		for (XrVector3f point: clip_near(box))
+		{
+			XrVector2f uv = project(fovs[eye], flip_y, point);
+			lo.x = std::min(lo.x, uv.x);
+			lo.y = std::min(lo.y, uv.y);
+			hi.x = std::max(hi.x, uv.x);
+			hi.y = std::max(hi.y, uv.y);
+		}
+
+		if (lo.x <= hi.x)
+		{
+			out[0] = std::clamp(lo.x, 0.0f, 1.0f);
+			out[1] = std::clamp(lo.y, 0.0f, 1.0f);
+			out[2] = std::clamp(hi.x, 0.0f, 1.0f);
+			out[3] = std::clamp(hi.y, 0.0f, 1.0f);
+		}
+		else
+		{
+			std::fill(out, out + 4, 0.0f);
+		}
+	}
+
+	// TEMP debug: about every 5 seconds at 72 Hz
+	static int debug_frame = 0;
+	if (debug_frame++ % 360 == 0)
+		U_LOG_I("wheel: enabled=%d anchored=%d left=%f,%f,%f,%f right=%f,%f,%f,%f", mask.enabled, wheel.anchored,
+		        mask.eye[0], mask.eye[1], mask.eye[2], mask.eye[3], mask.eye[4], mask.eye[5], mask.eye[6], mask.eye[7]);
+
+	foveation.set_wheel_mask(mask);
 }
 
 compositor::compositor(wivrn_session & session) :
@@ -818,7 +1009,7 @@ compositor::compositor(wivrn_session & session) :
         foveation(vk, images[0].image.info().extent)
 {
 	comp_base * c_base = this;
-	wheel = load_wheel_mask();
+	wheel = load_wheel_placement();
 	// Ensure we can safely cast pointers
 	assert(intptr_t(&base) == intptr_t(this));
 	auto res = vk_init_from_given(

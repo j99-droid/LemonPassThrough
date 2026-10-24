@@ -34,12 +34,23 @@ namespace wivrn
 struct clock_offset;
 struct vk_bundle;
 
-// Rectangle in eye UV (0..1, top-left origin) that becomes transparent in the alpha stream,
-// so the headset's passthrough shows through it.
+// Rectangles in eye UV (0..1, top-left origin) that become transparent in the alpha stream,
+// so the headset's passthrough shows through them. One rectangle per eye.
 struct wheel_mask
 {
 	int32_t enabled = 0;
-	float min_x = 0, min_y = 0, max_x = 0, max_y = 0;
+	float eye[8] = {}; // min_x, min_y, max_x, max_y for the left eye, then the right eye
+};
+
+// Where the wheel is. Anchored: a world-space box that is projected into each eye every frame.
+// Not anchored: a fixed rectangle in each eye's view.
+struct wheel_placement
+{
+	bool enabled = false;
+	bool anchored = false;
+	XrPosef pose{{0, 0, 0, 1}, {0, 0, 0}}; // centre of the wheel box, in tracking space
+	float width = 0.45f, height = 0.45f;   // metres
+	float rect[4] = {0.25f, 0.55f, 0.75f, 1.0f}; // head-space fallback: min_x, min_y, max_x, max_y
 };
 
 class foveation

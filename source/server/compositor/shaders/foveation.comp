@@ -47,10 +47,7 @@ layout(constant_id = 0) const int alpha_width = 0;
 layout(push_constant) uniform WheelMask
 {
 	int enabled;
-	float min_x;
-	float min_y;
-	float max_x;
-	float max_y;
+	float eye[8]; // min_x, min_y, max_x, max_y for the left eye, then the right eye
 } wheel_mask;
 
 const mat3 color_space = mat3(
@@ -136,8 +133,9 @@ void main()
 			vec4 texel = texelFetch(source[iz], ivec2(x, y), 0);
 			if (wheel_mask.enabled != 0)
 			{
+				int b = 4 * int(iz);
 				vec2 uv = (vec2(x, y) + 0.5) / vec2(textureSize(source[iz], 0));
-				if (all(greaterThanEqual(uv, vec2(wheel_mask.min_x, wheel_mask.min_y))) && all(lessThanEqual(uv, vec2(wheel_mask.max_x, wheel_mask.max_y))))
+				if (all(greaterThanEqual(uv, vec2(wheel_mask.eye[b], wheel_mask.eye[b + 1]))) && all(lessThanEqual(uv, vec2(wheel_mask.eye[b + 2], wheel_mask.eye[b + 3]))))
 					texel.a = 0.0;
 			}
 			colour += texel;

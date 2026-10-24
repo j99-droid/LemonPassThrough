@@ -6,17 +6,28 @@ A fork of [WiVRn](https://github.com/WiVRn/WiVRn) (wireless PC VR streaming to Q
 
 - **Renamed** to Lemon Pass Through. The app label and server startup banner use the new name. Package IDs and protocol names are unchanged, so this build installs over an existing WiVRn local build and talks to the same clients.
 - **New logo** (`logo.svg`, `logo.png`), used as the launcher icon.
-- **Wheel mask:** the server can make a rectangle of the eye view transparent. The headset shows passthrough there. The game is unchanged; the server requests alpha blend while the mask is on.
+- **Wheel mask:** the server makes part of each eye's view transparent, and the headset shows passthrough there. The game is unchanged; the server requests alpha blend while the mask is on.
+- **Room-anchored wheel box:** the mask comes from a box placed in the room, about where your wheel is. Each frame the box is projected into each eye, so it stays over the wheel as you move your head.
 - **In-headset editing** with the Quest controllers:
-  - Left thumbstick: move the rectangle.
-  - Right thumbstick: grow or shrink it (up grows, down shrinks).
+  - Right B: place a fresh, upright 45 cm box below and in front of you, facing where you face. Press it while looking at your wheel.
+  - Left thumbstick: nudge the box left, right, up or down.
+  - Right thumbstick: make the box wider or narrower (left/right) and taller or shorter (up/down).
   - Right A: save to `~/.config/wivrn/wheel-mask.txt`, loaded on the next start.
-  - The rectangle is hidden until a stick is first moved.
-- **Environment variable:** `WIVRN_WHEEL_MASK="min_x,min_y,max_x,max_y"` (eye UV, 0 to 1, top-left origin) sets the starting rectangle. It takes priority over the saved file.
+- **Head-fixed fallback:** without a placed box, the mask is a fixed rectangle in each eye's view. The sticks move and resize it instead.
+- **Environment variable:** `WIVRN_WHEEL_MASK="min_x,min_y,max_x,max_y"` (eye UV, 0 to 1, top-left origin) sets the head-fixed rectangle. It takes priority over the saved file's first line.
+
+### Save file
+
+`~/.config/wivrn/wheel-mask.txt` has one or two lines:
+
+1. The head-fixed rectangle: `min_x,min_y,max_x,max_y`.
+2. Only when a box has been placed: `x,y,z,qx,qy,qz,qw,width,height`. That's the box centre and orientation in tracking space, then its size in metres.
 
 ## Status
 
-Work in progress. The mask editing and alpha passthrough path were built and the controller input was confirmed reaching the server. Passthrough on the headset with a game running was still being verified when this was packaged. Treat it as experimental.
+Work in progress. Passthrough works in the headset with Assetto Corsa EVO running. Room anchoring was reworked to use the correct flat-image projection and to clip the box at the eye instead of hiding it. That rework is still being tested in the headset. Treat it as experimental.
+
+If the headset says "waiting for an application", check that `/run/user/$UID/wivrn/comp_ipc` exists. If it doesn't, restart the server, reconnect the headset, then start the game.
 
 ## Install the client (Quest)
 

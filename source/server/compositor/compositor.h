@@ -97,10 +97,13 @@ private:
 	layer_squasher squasher;
 	wivrn::foveation foveation;
 
-	// Wheel mask, edited from the headset controllers (see update_wheel_mask)
-	wivrn::wheel_mask wheel;
+	// Wheel mask, placed and edited from the headset controllers (see update_wheel_mask)
+	wivrn::wheel_placement wheel;
 	bool wheel_save_was_down = false;
+	bool wheel_place_was_down = false;
+	XrPosef head_pose{{0, 0, 0, 1}, {0, 0, 0}}; // midpoint of the eyes, from the last frame
 	void update_wheel_mask();
+	void apply_wheel_mask(const std::array<XrPosef, 2> & poses, const std::array<XrFovf, 2> & fovs, bool flip_y);
 
 	std::array<std::unique_ptr<video_encoder>, 3> encoders;
 
