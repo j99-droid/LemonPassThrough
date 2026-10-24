@@ -25,9 +25,13 @@ A fork of [WiVRn](https://github.com/WiVRn/WiVRn) (wireless PC VR streaming to Q
 
 ## Status
 
-Work in progress. Passthrough works in the headset with Assetto Corsa EVO running. Room anchoring was reworked to use the correct flat-image projection and to clip the box at the eye instead of hiding it. That rework is still being tested in the headset. Treat it as experimental.
+Working with Assetto Corsa EVO on a Quest 3: passthrough shows through the wheel box, and the box stays over the wheel as you move your head. Still experimental.
 
-If the headset says "waiting for an application", check that `/run/user/$UID/wivrn/comp_ipc` exists. If it doesn't, restart the server, reconnect the headset, then start the game.
+### Troubleshooting
+
+- **"Waiting for an application" in the headset:** start the server first, connect the headset, then start the game. A game started before the headset connected doesn't attach. Also check that `/run/user/$UID/wivrn/comp_ipc` exists; if it doesn't, restart the server.
+- **Headset drops out with "Network is unreachable" in the server log:** with the USB cable plugged in, the headset can connect over the cable's network link, and NetworkManager may keep resetting that link. Unplug the cable and use Wi-Fi. For adb without the cable, run `adb tcpip 5555` once over USB, then `adb connect <headset-ip>:5555`.
+- **About 1 fps in the headset:** don't minimize or cover the game window. Assetto Corsa EVO applies its hidden-window frame limit to VR too. Shrink the window instead.
 
 ## Install the client (Quest)
 
