@@ -294,7 +294,7 @@ file(REAL_PATH ${WIVRN_CSS} WIVRN_CSS_ABS BASE_DIRECTORY "${CMAKE_SOURCE_DIR}")
 set(IMAGES_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../images)
 set(ASSETS_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../assets-source)
 
-wivrn_rasterize_svg(SOURCE ${IMAGES_SRC_DIR}/wivrn.svg               DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/wivrn.png               WIDTH 540 HEIGHT 540 CSS ${WIVRN_CSS_ABS})
+wivrn_rasterize_svg(SOURCE ${IMAGES_SRC_DIR}/lemon-pass-through.svg DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/wivrn.png               WIDTH 540 HEIGHT 540 CSS ${WIVRN_CSS_ABS})
 wivrn_rasterize_svg(SOURCE ${IMAGES_SRC_DIR}/wivrn-pride.svg         DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/wivrn-pride.png         WIDTH 540 HEIGHT 540 CSS ${WIVRN_CSS_ABS})
 wivrn_rasterize_svg(SOURCE ${IMAGES_SRC_DIR}/wivrn-christmas.svg     DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/wivrn-christmas.png     WIDTH 540 HEIGHT 540 CSS ${WIVRN_CSS_ABS})
 wivrn_rasterize_svg(SOURCE ${ASSETS_SRC_DIR}/passthrough.svg         DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/passthrough.png         WIDTH 256 HEIGHT 256)

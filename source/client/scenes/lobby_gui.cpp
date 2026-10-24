@@ -1094,7 +1094,7 @@ std::vector<std::pair<int, XrCompositionLayerQuad>> scenes::lobby::draw_gui(XrTi
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, wivrn::ui::metrics::window_padding * 2);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, wivrn::ui::metrics::window_rounding);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, wivrn::ui::metrics::window_border_size);
-		ImGui::Begin("WiVRn", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
+		ImGui::Begin("Lemon Pass Through", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
 		gui_first_run();
 		ImGui::End();
 		ImGui::PopStyleVar(4); // ImGuiStyleVar_FrameRounding, ImGuiStyleVar_WindowPadding, ImGuiStyleVar_WindowRounding, ImGuiStyleVar_WindowBorderSize
