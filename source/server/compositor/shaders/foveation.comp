@@ -133,9 +133,14 @@ void main()
 			vec4 texel = texelFetch(source[iz], ivec2(x, y), 0);
 			if (wheel_mask.enabled != 0)
 			{
+				// The mask is the ellipse that fills this eye's rectangle
 				int b = 4 * int(iz);
 				vec2 uv = (vec2(x, y) + 0.5) / vec2(textureSize(source[iz], 0));
-				if (all(greaterThanEqual(uv, vec2(wheel_mask.eye[b], wheel_mask.eye[b + 1]))) && all(lessThanEqual(uv, vec2(wheel_mask.eye[b + 2], wheel_mask.eye[b + 3]))))
+				vec2 lo = vec2(wheel_mask.eye[b], wheel_mask.eye[b + 1]);
+				vec2 hi = vec2(wheel_mask.eye[b + 2], wheel_mask.eye[b + 3]);
+				vec2 radius = (hi - lo) / 2.0;
+				vec2 d = (uv - (lo + hi) / 2.0) / max(radius, vec2(1e-6));
+				if (all(greaterThan(radius, vec2(0.0))) && dot(d, d) <= 1.0)
 					texel.a = 0.0;
 			}
 			colour += texel;

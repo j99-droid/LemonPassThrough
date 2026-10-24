@@ -340,13 +340,6 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 
 	beman::inplace_vector::inplace_vector<vk::ImageMemoryBarrier2, 3> image_barriers;
 
-	// TEMP debug: blend mode decides whether the alpha stream is produced at all
-	static int debug_blend_frame = 0;
-	if (debug_blend_frame++ % 360 == 0)
-		U_LOG_I("blend debug: env_blend_mode=%d (alpha=%d) wheel enabled=%d",
-		        int(layer_accum.data.env_blend_mode), int(XRT_BLEND_MODE_ALPHA_BLEND),
-		        wheel.enabled);
-
 	// Check if we can pass a layer directly to foveation
 	if (layer_accum.layer_count == 1 and
 	    (layer_accum.layers[0].data.type == XRT_LAYER_PROJECTION or
@@ -811,8 +804,9 @@ wivrn::wheel_placement load_wheel_placement()
 		wheel.enabled = true;
 		wheel.pose.position = p;
 		wheel.pose.orientation = q;
-		wheel.width = size[0];
-		wheel.height = size[1];
+		// The wheel is a circle: a box saved by an older build becomes a circle of its average size
+		wheel.width = (size[0] + size[1]) / 2;
+		wheel.height = wheel.width;
 	}
 	return wheel;
 }
@@ -833,7 +827,8 @@ void save_wheel_placement(const wivrn::wheel_placement & wheel)
 }
 } // namespace
 
-// Left thumbstick moves the wheel, right thumbstick resizes it, right B places it at the head, right A saves.
+// Left thumbstick moves the wheel. Holding the left trigger, left thumbstick up and down scales it instead.
+// Right thumbstick up and down also scales it. Right B places it at the head, right A saves.
 void compositor::update_wheel_mask()
 {
 	auto & left = session.get_left_controller();
@@ -852,8 +847,16 @@ void compositor::update_wheel_mask()
 	// OpenXR convention: positive x is right, positive y is up.
 	xrt_vec2 move = stick(left.get_input(XRT_INPUT_TOUCH_THUMBSTICK));
 	xrt_vec2 grow = stick(right.get_input(XRT_INPUT_TOUCH_THUMBSTICK));
+	auto trigger = left.get_input(XRT_INPUT_TOUCH_TRIGGER_VALUE);
 	bool save_down = pressed(right.get_input(XRT_INPUT_TOUCH_A_CLICK));
 	bool place_down = pressed(right.get_input(XRT_INPUT_TOUCH_B_CLICK));
+
+	// With the left trigger held, the left stick scales instead of moving
+	if (trigger and trigger->value.vec1.x > 0.5f)
+	{
+		grow.y += move.y;
+		move = {};
+	}
 
 	// Act on button presses, not on holds
 	// Placing starts a fresh, upright box at the default size, facing where the head faces
@@ -872,25 +875,24 @@ void compositor::update_wheel_mask()
 
 	float mx = deadzone(move.x);
 	float my = deadzone(move.y);
-	float gx = deadzone(grow.x);
-	float gy = deadzone(grow.y);
-	if (mx != 0 or my != 0 or gx != 0 or gy != 0)
+	float g = deadzone(std::clamp(grow.y, -1.0f, 1.0f)); // stick up grows the circle
+	if (mx != 0 or my != 0 or g != 0)
 		wheel.enabled = true;
 
 	if (wheel.anchored)
 	{
-		// Left and right follow the box's own sideways direction, up and down stay vertical
+		// Left and right follow the circle's own sideways direction, up and down stay vertical
 		XrVector3f side = rotate(wheel.pose.orientation, {mx * wheel_nudge_speed, 0, 0});
 		wheel.pose.position = add(wheel.pose.position, {side.x, my * wheel_nudge_speed, side.z});
-		wheel.width = std::max(wheel_min_metres, wheel.width + gx * wheel_size_speed);
-		wheel.height = std::max(wheel_min_metres, wheel.height + gy * wheel_size_speed);
+		wheel.width = std::max(wheel_min_metres, wheel.width + g * wheel_size_speed);
+		wheel.height = wheel.width;
 	}
 	else
 	{
 		float dx = mx * wheel_move_speed;
 		float dy = -my * wheel_move_speed; // stick up moves the rectangle up the image
-		float ex = gx * wheel_move_speed;
-		float ey = gy * wheel_move_speed;  // stick up grows the rectangle in both directions
+		float ex = g * wheel_move_speed;
+		float ey = g * wheel_move_speed;
 		wheel.rect[0] += dx - ex;
 		wheel.rect[2] += dx + ex;
 		wheel.rect[1] += dy - ey;
@@ -930,17 +932,21 @@ void compositor::apply_wheel_mask(const std::array<XrPosef, 2> & poses, const st
 			continue;
 		}
 
-		// Project the wheel's box into this eye, and use its bounding rectangle.
-		// The part of the box behind the eye is clipped off, so a box partly behind the eye still shows.
-		float w = wheel.width / 2;
-		float h = wheel.height / 2;
-		std::vector<XrVector3f> box;
-		for (XrVector3f corner: {XrVector3f{-w, -h, 0}, XrVector3f{w, -h, 0}, XrVector3f{w, h, 0}, XrVector3f{-w, h, 0}})
-			box.push_back(to_view(poses[eye], add(wheel.pose.position, rotate(wheel.pose.orientation, corner))));
+		// Project the wheel's circle into this eye, and use its bounding rectangle: the shader fills
+		// the ellipse inside it. The part of the circle behind the eye is clipped off.
+		constexpr int circle_points = 32;
+		float radius = wheel.width / 2;
+		std::vector<XrVector3f> circle;
+		for (int i = 0; i < circle_points; ++i)
+		{
+			float a = 2 * std::numbers::pi_v<float> * i / circle_points;
+			XrVector3f point{radius * std::cos(a), radius * std::sin(a), 0};
+			circle.push_back(to_view(poses[eye], add(wheel.pose.position, rotate(wheel.pose.orientation, point))));
+		}
 
 		XrVector2f lo{2, 2};
 		XrVector2f hi{-1, -1};
-		for (XrVector3f point: clip_near(box))
+		for (XrVector3f point: clip_near(circle))
 		{
 			XrVector2f uv = project(fovs[eye], flip_y, point);
 			lo.x = std::min(lo.x, uv.x);
@@ -949,24 +955,19 @@ void compositor::apply_wheel_mask(const std::array<XrPosef, 2> & poses, const st
 			hi.y = std::max(hi.y, uv.y);
 		}
 
+		// Not clamped to the image: clamping would squash the ellipse when the circle is partly out of view
 		if (lo.x <= hi.x)
 		{
-			out[0] = std::clamp(lo.x, 0.0f, 1.0f);
-			out[1] = std::clamp(lo.y, 0.0f, 1.0f);
-			out[2] = std::clamp(hi.x, 0.0f, 1.0f);
-			out[3] = std::clamp(hi.y, 0.0f, 1.0f);
+			out[0] = lo.x;
+			out[1] = lo.y;
+			out[2] = hi.x;
+			out[3] = hi.y;
 		}
 		else
 		{
 			std::fill(out, out + 4, 0.0f);
 		}
 	}
-
-	// TEMP debug: about every 5 seconds at 72 Hz
-	static int debug_frame = 0;
-	if (debug_frame++ % 360 == 0)
-		U_LOG_I("wheel: enabled=%d anchored=%d left=%f,%f,%f,%f right=%f,%f,%f,%f", mask.enabled, wheel.anchored,
-		        mask.eye[0], mask.eye[1], mask.eye[2], mask.eye[3], mask.eye[4], mask.eye[5], mask.eye[6], mask.eye[7]);
 
 	foveation.set_wheel_mask(mask);
 }
