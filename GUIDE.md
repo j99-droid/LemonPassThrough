@@ -33,7 +33,7 @@ If the headset wasn't plugged in, install the app later with:
 
 Run `./install.sh --help` for the other options.
 
-> **Already have WiVRn?** Lemon Pass Through uses the same headset app ID as a locally built WiVRn (`org.meumeu.wivrn.local`), so it replaces that build on the headset. The WiVRn app from the Meta store is separate and unaffected.
+> **Already have WiVRn?** The Lemon Pass Through headset app is a separate app, so it installs alongside WiVRn without touching it. Use the Lemon Pass Through app with the Lemon Pass Through server; WiVRn's app may not match its version.
 
 ## 2. Set up your game in Steam
 

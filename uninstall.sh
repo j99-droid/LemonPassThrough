@@ -6,7 +6,7 @@
 set -euo pipefail
 
 PREFIX="${LEMON_PREFIX:-$HOME/.local/share/lemon-pass-through}"
-APP_ID="org.meumeu.wivrn.local"
+APP_ID="io.github.j99droid.lemonpassthrough"
 
 rm -rf "$PREFIX"
 rm -f "$HOME/.local/bin/lemon-pass-through" "$HOME/.local/share/applications/lemon-pass-through.desktop"

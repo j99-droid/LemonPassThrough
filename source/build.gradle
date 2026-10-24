@@ -103,7 +103,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "org.meumeu.wivrn"
+        applicationId "io.github.j99droid.lemonpassthrough"
         // for Vulkan, need at least 24
         // for AImage_getHardwareBuffer, API 26
         minSdkVersion 29
@@ -180,7 +180,7 @@ android {
 
         release {
             manifestPlaceholders.ComOculusSupportedDevices = "all"
-            applicationIdSuffix = project.hasProperty('suffix') ? suffix: ".local"
+            applicationIdSuffix = project.hasProperty('suffix') ? suffix: ""
         }
 
         releaseDebuggable {
@@ -204,7 +204,7 @@ android {
         }
 
         debug {
-            applicationIdSuffix = project.hasProperty('suffix') ? suffix: ".local"
+            applicationIdSuffix = project.hasProperty('suffix') ? suffix: ".debug"
             manifestPlaceholders.ComOculusSupportedDevices = "all"
         }
 

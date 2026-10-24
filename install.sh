@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO="j99-droid/LemonPassThrough"
 APK_URL="https://github.com/$REPO/releases/latest/download/LemonPassThrough.apk"
-APP_ID="org.meumeu.wivrn.local"
+APP_ID="io.github.j99droid.lemonpassthrough"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${LEMON_PREFIX:-$HOME/.local/share/lemon-pass-through}"
@@ -182,7 +182,7 @@ install_headset_app() {
 		curl -fL --retry 3 -o "$apk" "$APK_URL" || fail "could not download $APK_URL"
 	fi
 	if ! "$ADB" install -r "$apk"; then
-		note "Install failed. If another WiVRn build with the same app ID is installed, remove it first:"
+		note "Install failed. If an older copy signed with a different key is installed, remove it first:"
 		note "  adb uninstall $APP_ID"
 		fail "the headset app was not installed"
 	fi
